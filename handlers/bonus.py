@@ -15,20 +15,16 @@ router = Router()
 class PromoStates(StatesGroup):
     waiting_for_code = State()
 
-@router.message(F.text.lower().in_(["/bonus", "🎟️ активация", "активация", "бонус", "промо"]))
-async def activation_menu(message: Message) -> None:
-    """Интерфейс распределительного центра для промокодов и дейли-бонуса."""
-    tg_id = message.from_user.id
+async def render_bonus_menu(tg_id: int, message: Message, edit: bool = False) -> None:
+    """Контролируемый рендеринг центра бонусов без дублирования сообщений."""
     profile = get_full_profile(tg_id)
     if not profile:
         return
 
-    # Проверка таймера суточного бонуса
     bonus_locked = False
     time_left_str = ""
     
     if profile["last_daily_bonus"]:
-        # Парсим таймстамп из БД SQLite
         last_bonus_time = datetime.strptime(profile["last_daily_bonus"], "%Y-%m-%d %H:%M:%S")
         time_passed = datetime.now() - last_bonus_time
         
@@ -45,11 +41,17 @@ async def activation_menu(message: Message) -> None:
         "или активировать секретный правительственный промокод."
     )
     
-    await message.answer(text, reply_markup=get_activation_inline(bonus_locked, time_left_str))
+    if edit:
+        await message.edit_text(text, reply_markup=get_activation_inline(bonus_locked, time_left_str))
+    else:
+        await message.answer(text, reply_markup=get_activation_inline(bonus_locked, time_left_str))
+
+@router.message(F.text.lower().in_(["/bonus", "🎟️ активация", "активация", "бонус", "промо"]))
+async def activation_menu(message: Message) -> None:
+    await render_bonus_menu(message.from_user.id, message, edit=False)
 
 @router.callback_query(F.data == "bonus_locked")
 async def process_bonus_locked(callback: CallbackQuery) -> None:
-    """Всплывающее окно, если бонус еще не остыл."""
     await callback.answer(
         "Рано, босс! Твои люди еще не собрали дань со всех точек.", 
         show_alert=True
@@ -57,13 +59,11 @@ async def process_bonus_locked(callback: CallbackQuery) -> None:
 
 @router.callback_query(F.data == "bonus_claim")
 async def process_bonus_claim(callback: CallbackQuery) -> None:
-    """Выдача ежедневного бонуса с эффектом Overcharge (энергия в плюс без лимита)."""
+    """Выдача ежедневного бонуса с бесшовным обновлением интерфейса."""
     tg_id = callback.from_user.id
     
     conn = get_db_connection()
     cursor = conn.cursor()
-    
-    # Начисляем 50 баксов и 5 AP (Overcharge разрешен по ТЗ)
     cursor.execute("""
         UPDATE users 
         SET money = money + 50.0, 
@@ -71,68 +71,68 @@ async def process_bonus_claim(callback: CallbackQuery) -> None:
             last_daily_bonus = strftime('%Y-%m-%d %H:%M:%S', 'now', 'localtime')
         WHERE tg_id = ?;
     """, (tg_id,))
-    
     conn.commit()
     conn.close()
     
-    await callback.answer("🎉 Вы успешно забрали долю: +50.0 💵 и +5 AP (Эффект Overcharge)!", show_alert=True)
-    await callback.message.delete()
-    # Обновляем экран
-    await activation_menu(callback.message)
+    await callback.answer("🎉 Вы успешно забрали долю: +50.0 💵 и +5 AP (Overcharge)!", show_alert=True)
+    # Вместо удаления сообщения, мы просто бесшовно его перерисовываем! Кнопка сменится на таймер
+    await render_bonus_menu(tg_id, callback.message, edit=True)
 
 @router.callback_query(F.data == "promo_activate")
 async def process_promo_init(callback: CallbackQuery, state: FSMContext) -> None:
-    """Перевод игрока в FSM для ввода промокода."""
+    """Перевод игрока в FSM для ввода промокода с изменением текста."""
     await callback.answer()
-    await callback.message.answer("🎟️ <b>Введите наградной промокод:</b>")
+    await callback.message.edit_text(
+        "🎟 ================ 🎟\n"
+        "<b>Ввод наградного промокода</b>\n\n"
+        "Отправьте секретный код ответным сообщением чат:",
+        reply_markup=None
+    )
     await state.set_state(PromoStates.waiting_for_code)
 
 @router.message(PromoStates.waiting_for_code)
 async def process_promo_validation(message: Message, state: FSMContext) -> None:
-    """Проверка лимитов, даты истечения и начисление награды по промокоду."""
+    """Проверка промокода и начисление награды."""
     code_input = message.text.strip()
     tg_id = message.from_user.id
     await state.clear()
 
     conn = get_db_connection()
     cursor = conn.cursor()
-    
     cursor.execute("SELECT * FROM promocodes WHERE code = ?;", (code_input,))
     promo = cursor.fetchone()
     
     if not promo:
         await message.answer("❌ Такого промокода не существует или он устарел.")
         conn.close()
+        await render_bonus_menu(tg_id, message, edit=False)
         return
 
-    # Проверка даты истечения
     expires_at = datetime.strptime(promo["expires_at"], "%Y-%m-%d %H:%M:%S")
     if datetime.now() > expires_at:
         await message.answer("❌ Срок действия этого промокода истек.")
         conn.close()
+        await render_bonus_menu(tg_id, message, edit=False)
         return
 
-    # Проверка лимита общих активаций
     if promo["current_activations"] >= promo["max_activations"]:
         await message.answer("❌ Этот промокод уже полностью исчерпан.")
         conn.close()
+        await render_bonus_menu(tg_id, message, edit=False)
         return
 
-    # Проверка, активировал ли этот конкретный юзер ранее
     activated_users = json.loads(promo["activated_users"])
     if tg_id in activated_users:
         await message.answer("❌ Вы уже активировали этот промокод ранее!")
         conn.close()
+        await render_bonus_menu(tg_id, message, edit=False)
         return
 
-    # Проходим валидацию — начисляем награду
     reward_type = promo["reward_type"]
     reward_value = promo["reward_value"]
     
     try:
         cursor.execute("BEGIN TRANSACTION;")
-        
-        # Динамически обновляем поле в зависимости от типа награды
         if reward_type == "money":
             cursor.execute("UPDATE users SET money = money + ? WHERE tg_id = ?;", (reward_value, tg_id))
             reward_text = f"{reward_value} 💵"
@@ -145,7 +145,6 @@ async def process_promo_validation(message: Message, state: FSMContext) -> None:
         else:
             raise ValueError("Неизвестный тип награды")
 
-        # Добавляем юзера в JSON-массив и инкрементируем счетчик активаций
         activated_users.append(tg_id)
         cursor.execute("""
             UPDATE promocodes 
@@ -156,8 +155,10 @@ async def process_promo_validation(message: Message, state: FSMContext) -> None:
         
         conn.commit()
         await message.answer(f"🎉 Промокод успешно активирован! Награда: <b>{reward_text}</b> доставлена на счет.")
-    except Exception as e:
+    except Exception:
         conn.rollback()
         await message.answer("❌ Системный сбой при обработке транзакции.")
     finally:
         conn.close()
+        # Возвращаем главное меню центра бонусов
+        await render_bonus_menu(tg_id, message, edit=False)
