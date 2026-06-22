@@ -8,6 +8,7 @@ from aiogram import Bot
 from database.engine import get_db_connection
 from database.queries import check_and_execute_levelup
 from utils.economy import calculate_client_interval, check_price_overhead
+from utils.ui_manager import refresh_user_profile_live # Импортируем менеджер обновлений
 
 logger = logging.getLogger("shadow_tycoon_tickers")
 
@@ -24,10 +25,7 @@ ITEM_NAMES_RU = {
 }
 
 async def energy_regen_ticker() -> None:
-    """
-    Движок регенерации энергии (AP).
-    Каждые 5 минут начисляет игрокам по +1 AP, не превышая их max_energy.
-    """
+    """Движок регенерации энергии (AP). Начисляет игрокам по +1 AP каждые 5 минут."""
     while True:
         await asyncio.sleep(300)
         conn = get_db_connection()
@@ -45,10 +43,7 @@ async def energy_regen_ticker() -> None:
             conn.close()
 
 async def market_ticker() -> None:
-    """
-    Авто-Тик глобального рынка.
-    Каждые 30 минут случайным образом меняет коэффициенты спроса (demand_modifier) в диапазоне [0.6, 1.6].
-    """
+    """Авто-Тик глобального рынка. Смена коэффициентов спроса каждые 30 минут."""
     while True:
         await asyncio.sleep(1800)
         conn = get_db_connection()
@@ -72,10 +67,7 @@ async def market_ticker() -> None:
             conn.close()
 
 async def buyer_simulation_ticker(bot: Bot) -> None:
-    """
-    Движок симуляции покупателей (Продажи).
-    Каждую минуту проверяет всех игроков на наступление таймера прихода клиента.
-    """
+    """Движок симуляции покупателей (Продажи) с поддержкой динамического Live UI апдейта."""
     while True:
         await asyncio.sleep(60)
         conn = get_db_connection()
@@ -137,6 +129,9 @@ async def buyer_simulation_ticker(bot: Bot) -> None:
                     """, (now_ts, tg_id))
                     conn.commit()
                     
+                    # Запускаем обновление Live UI, чтобы сразу показать падение репутации
+                    await refresh_user_profile_live(tg_id, bot)
+                    
                     try:
                         await bot.send_message(
                             tg_id,
@@ -159,6 +154,9 @@ async def buyer_simulation_ticker(bot: Bot) -> None:
                     conn.commit()
                     
                     lvl_check = check_and_execute_levelup(tg_id)
+                    
+                    # Обновляем открытый профиль игрока с новыми деньгами/опытом/уровнем
+                    await refresh_user_profile_live(tg_id, bot)
                     
                     try:
                         if lvl_check and lvl_check["leveled_up"]:
