@@ -65,16 +65,69 @@ def buy_goods(tg_id: int, item_field: str, count: int, total_cost: float) -> Non
         # Наполнение склада
         cursor.execute(f"UPDATE warehouse_stock SET {item_field} = {item_field} + ? WHERE tg_id = ?;", (count, tg_id))
         
-        # Проверка триггера уровня (Level Up)
-        cursor.execute("SELECT level, exp FROM users WHERE tg_id = ?;", (tg_id,))
+        # Проверка триггера уровня (Level Up) при ручной закупке
+        cursor.execute("SELECT level, exp, max_energy FROM users WHERE tg_id = ?;", (tg_id,))
         user = cursor.fetchone()
         if user:
             exp_needed = 100 * (user["level"] ** 2)
             if user["exp"] >= exp_needed:
-                cursor.execute("UPDATE users SET level = level + 1, exp = exp - ? WHERE tg_id = ?;", (exp_needed, tg_id))
+                new_level = user["level"] + 1
+                new_max_energy = user["max_energy"] + 5
+                cursor.execute("""
+                    UPDATE users 
+                    SET level = ?, 
+                        exp = exp - ?, 
+                        max_energy = ?, 
+                        energy = ? 
+                    WHERE tg_id = ?;
+                """, (new_level, exp_needed, new_max_energy, new_max_energy, tg_id))
                 
         conn.commit()
     except sqlite3.Error:
         conn.rollback()
     finally:
         conn.close()
+
+def check_and_execute_levelup(tg_id: int) -> dict | None:
+    """
+    Проверяет, набрал ли игрок достаточно опыта для Level Up (для фоновых процессов).
+    Если да — повышает уровень, увеличивает лимит энергии (+5 за уровень),
+    полностью восстанавливает её и возвращает новые параметры.
+    """
+    conn = get_db_connection()
+    conn.row_factory = sqlite3.Row
+    cursor = conn.cursor()
+    
+    cursor.execute("SELECT level, exp, max_energy FROM users WHERE tg_id = ?;", (tg_id,))
+    user = cursor.fetchone()
+    
+    if not user:
+        conn.close()
+        return None
+        
+    current_level = user["level"]
+    current_exp = user["exp"]
+    
+    required_exp = 100 * (max(1, current_level) ** 2)
+    
+    if current_exp >= required_exp:
+        new_level = current_level + 1
+        new_max_energy = user["max_energy"] + 5
+        leftover_exp = current_exp - required_exp
+        
+        cursor.execute("BEGIN TRANSACTION;")
+        cursor.execute("""
+            UPDATE users 
+            SET level = ?, 
+                exp = ?, 
+                max_energy = ?, 
+                energy = ?
+            WHERE tg_id = ?;
+        """, (new_level, leftover_exp, new_max_energy, new_max_energy, tg_id))
+        conn.commit()
+        conn.close()
+        
+        return {"leveled_up": True, "new_level": new_level, "max_energy": new_max_energy}
+        
+    conn.close()
+    return {"leveled_up": False}
