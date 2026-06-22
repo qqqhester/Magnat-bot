@@ -152,3 +152,30 @@ async def buyer_simulation_ticker(bot: Bot) -> None:
         except Exception as e:
             logger.error(f"Ошибка в buyer_simulation_ticker: {e}")
             await asyncio.sleep(5)
+
+async def energy_regen_ticker() -> None:
+    """
+    Фоновый цикл регенерации энергии.
+    Каждые 15 минут восстанавливает 2 единицы AP всем игрокам, 
+    у которых текущая энергия меньше максимальной.
+    """
+    while True:
+        try:
+            await asyncio.sleep(900)  # 15 минут (900 секунд)
+            conn = get_db_connection()
+            cursor = conn.cursor()
+            
+            # Атомарный апдейт энергии в пределах лимита max_energy
+            cursor.execute("""
+                UPDATE users 
+                SET energy = MIN(max_energy, energy + 2),
+                    last_energy_regen = CURRENT_TIMESTAMP
+                WHERE energy < max_energy AND is_ban = 0;
+            """)
+            
+            conn.commit()
+            conn.close()
+            logger.info("Регенерация энергии для активных магнатов успешно выполнена.")
+        except Exception as e:
+            logger.error(f"Ошибка в energy_regen_ticker: {e}")
+            await asyncio.sleep(5)
