@@ -14,35 +14,9 @@ router = Router()
 class ProfileStates(StatesGroup):
     input_shop_name = State()
 
-@router.message(CommandStart())
-@router.message(F.text.lower().in_(["старт", "начать", "привет"]))
-async def start_cmd(message: Message, state: FSMContext) -> None:
-    """Точка входа: регистрация сессии в БД и выдача Reply-сетки."""
-    await state.clear()
-    tg_id = message.from_user.id
-    username = message.from_user.username
-    
-    # Регистрация в БД (если новый игрок)
-    is_new = register_user_if_not_exists(tg_id, username)
-    
-    welcome_text = (
-        "🚀 <b>Добро пожаловать в экономический симулятор «Теневой Магнат»!</b>\n\n"
-        "Вы начали свой путь с мелкой торговой точки. Ваша цель — построить монолитную "
-        "бизнес-империю, нанимать персонал, управлять логистикой и обходить конкурентов.\n\n"
-        "📊 Используйте нижнее меню для управления процессами."
-    )
-    if is_new:
-        welcome_text += "\n\n🎁 Вам начислено стартовое пособие: <b>100.0 💵</b>"
-        
-    await message.answer(welcome_text, reply_markup=get_main_menu_keyboard())
-
-@router.message(Command("profile"))
-@router.message(F.text.lower().in_(["👤 моя империя", "проф", "стата"]))
-async def show_profile(message: Message) -> None:
-    """Сборка и вывод полных данных профиля игрока."""
-    tg_id = message.from_user.id
+async def render_profile_screen(tg_id: int, message: Message, edit: bool = False) -> None:
+    """Универсальная функция сборки и отрисовки профиля (без спама)."""
     profile = get_full_profile(tg_id)
-    
     if not profile:
         await message.answer("❌ Профиль не найден. Напишите /start для инициализации.")
         return
@@ -60,8 +34,7 @@ async def show_profile(message: Message) -> None:
     progress_segments = int((profile["exp"] / exp_next) * 10) if exp_next > 0 else 0
     progress_bar = "▓" * progress_segments + "░" * (10 - progress_segments)
     
-    # Эмуляция ТОПа (в рабочей версии заменяется на COUNT/RANK в SQL)
-    top_rank = 12 
+    top_rank = 12  # Эмуляция ТОПа
     
     profile_text = (
         f"🏪 Империя: <b>\"{profile['shop_name']}\"</b>\n"
@@ -75,13 +48,53 @@ async def show_profile(message: Message) -> None:
         f"👑 Место в глобальном ТОПе: #{top_rank}"
     )
     
-    await message.answer(profile_text, reply_markup=get_profile_inline())
+    if edit:
+        await message.edit_text(profile_text, reply_markup=get_profile_inline())
+    else:
+        await message.answer(profile_text, reply_markup=get_profile_inline())
+
+@router.message(CommandStart())
+@router.message(F.text.lower().in_(["старт", "начать", "привет"]))
+async def start_cmd(message: Message, state: FSMContext) -> None:
+    """Точка входа: регистрация сессии в БД и выдача Reply-сетки."""
+    await state.clear()
+    tg_id = message.from_user.id
+    username = message.from_user.username
+    
+    is_new = register_user_if_not_exists(tg_id, username)
+    
+    welcome_text = (
+        "🚀 <b>Добро пожаловать в экономический симулятор «Теневой Магнат»!</b>\n\n"
+        "Вы начали свой путь с мелкой торговой точки. Ваша цель — построить монолитную "
+        "бизнес-империю, нанимать персонал, управлять логистикой и обходить конкурентов.\n\n"
+        "📊 Используйте нижнее меню для управления процессами."
+    )
+    if is_new:
+        welcome_text += "\n\n🎁 Вам начислено стартовое пособие: <b>100.0 💵</b>"
+        
+    await message.answer(welcome_text, reply_markup=get_main_menu_keyboard())
+
+@router.message(F.text.lower().in_(["👤 моя империя", "проф", "стата", "/profile"]))
+async def show_profile_msg(message: Message) -> None:
+    """Отрисовка профиля через текстовую команду."""
+    await render_profile_screen(message.from_user.id, message, edit=False)
+
+@router.callback_query(F.data == "profile_back")
+async def profile_back_callback(callback: CallbackQuery) -> None:
+    """Бесшовный возврат в главное меню профиля из подменю."""
+    await callback.answer()
+    await render_profile_screen(callback.from_user.id, callback.message, edit=True)
 
 @router.callback_query(F.data == "profile_rename")
 async def start_rename_shop(callback: CallbackQuery, state: FSMContext) -> None:
     """Перевод пользователя в состояние FSM ожидания нового имени."""
     await callback.answer()
-    await callback.message.answer("✏️ Введите новое название для вашей фирмы (до 20 символов):")
+    # Информируем пользователя без отправки нового сообщения
+    await callback.message.edit_text(
+        "✏️ <b>Режим переименования фирмы</b>\n\n"
+        "Введите новое название для вашей торговой марки прямо в чат (до 20 символов):",
+        reply_markup=None # Убираем кнопки на время ввода
+    )
     await state.set_state(ProfileStates.input_shop_name)
 
 @router.message(ProfileStates.input_shop_name)
@@ -95,6 +108,7 @@ async def process_shop_rename(message: Message, state: FSMContext) -> None:
         
     update_shop_name(message.from_user.id, new_name)
     await state.clear()
+    
+    # Отправляем подтверждение и сразу под ним свежий профиль
     await message.answer(f"✅ Название фирмы успешно изменено на: <b>\"{new_name}\"</b>")
-    # Перевызываем показ профиля для обновления UI
-    await show_profile(message)
+    await render_profile_screen(message.from_user.id, message, edit=False)
