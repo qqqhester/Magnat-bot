@@ -22,7 +22,6 @@ def get_b2b_shop_main() -> InlineKeyboardMarkup:
 def get_buy_volume_keyboard(item_id: str) -> InlineKeyboardMarkup:
     """Инлайн-калькулятор закупки конкретной партии товара."""
     builder = InlineKeyboardBuilder()
-    # Передаем тип операции, идентификатор товара и объем в callback_data
     builder.row(
         InlineKeyboardButton(text="+1", callback_data=f"buy_vol:{item_id}:1"),
         InlineKeyboardButton(text="+10", callback_data=f"buy_vol:{item_id}:10"),
@@ -58,4 +57,27 @@ def get_activation_inline(bonus_locked: bool, time_left_str: str = "") -> Inline
         
     builder.row(InlineKeyboardButton(text=bonus_text, callback_data=bonus_callback))
     builder.row(InlineKeyboardButton(text="🎟️ Ввести Наградной Промокод", callback_data="promo_activate"))
+    return builder.as_markup()
+
+# --- НОВЫЙ БЛОК: КЛАВИАТУРЫ АДМИН-ПАНЕЛИ ---
+
+def get_admin_main() -> InlineKeyboardMarkup:
+    """Главный пульт управления гейм-мастера."""
+    builder = InlineKeyboardBuilder()
+    builder.row(InlineKeyboardButton(text="💰 Изменить кэш игроку", callback_data="admin_give_money"))
+    builder.row(InlineKeyboardButton(text="🔄 Ротация рынка (Тик)", callback_data="admin_market_tick"))
+    builder.row(InlineKeyboardButton(text="📊 Серверная статистика", callback_data="admin_server_stats"))
+    builder.row(InlineKeyboardButton(text="❌ Закрыть пульт", callback_data="admin_close"))
+    return builder.as_markup()
+
+def get_admin_back() -> InlineKeyboardMarkup:
+    """Универсальная кнопка возврата в корень админки."""
+    builder = InlineKeyboardBuilder()
+    builder.row(InlineKeyboardButton(text="⬅️ Назад в админку", callback_data="admin_main_menu"))
+    return builder.as_markup()
+
+def get_admin_cancel() -> InlineKeyboardMarkup:
+    """Кнопка сброса FSM состояний ввода."""
+    builder = InlineKeyboardBuilder()
+    builder.row(InlineKeyboardButton(text="❌ Отменить операцию", callback_data="admin_main_menu"))
     return builder.as_markup()
