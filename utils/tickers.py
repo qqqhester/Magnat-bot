@@ -1,181 +1,195 @@
 import asyncio
-import random
 import logging
+import random
 import sqlite3
 from datetime import datetime
 from aiogram import Bot
+
 from database.engine import get_db_connection
-from utils.economy import calculate_client_interval, get_final_price
+from utils.economy import calculate_client_interval, check_price_overhead
 
-logger = logging.getLogger(__name__)
+logger = logging.getLogger("shadow_tycoon_tickers")
 
-async def market_ticker() -> None:
-    """
-    Фоновый цикл обновления глобального рынка.
-    Каждые 30 минут случайным образом меняет коэффициенты спроса на товары.
-    """
-    items = ["bread", "milk", "meat", "clothes", "phones"]
-    while True:
-        try:
-            await asyncio.sleep(1800) # 30 минут
-            conn = get_db_connection()
-            cursor = conn.cursor()
-            
-            # Проверяем, не запущен ли глобальный кризис админом (когда у всех 0.5)
-            cursor.execute("SELECT demand_modifier FROM system_market WHERE item_id = 'bread';")
-            row = cursor.fetchone()
-            if row and row["demand_modifier"] == 0.5:
-                # Если идет форсированный кризис, не перебиваем его случайным тиком
-                conn.close()
-                continue
+# Справочник базовых закупочных/рыночных цен для расчета оверпрайса
+BASE_PRICES = {
+    "bread": 10.0,
+    "milk": 15.0,
+    "phones": 200.0
+}
 
-            for item in items:
-                # Случайный коэффициент спроса от 0.7 (низкий) до 1.5 (высокий бум)
-                new_modifier = round(random.uniform(0.7, 1.5), 2)
-                cursor.execute("""
-                    INSERT INTO system_market (item_id, base_price, demand_modifier, last_update)
-                    VALUES (?, ?, ?, CURRENT_TIMESTAMP)
-                    ON CONFLICT(item_id) DO UPDATE SET 
-                        demand_modifier = EXCLUDED.demand_modifier,
-                        last_update = CURRENT_TIMESTAMP;
-                """, (item, 10.0 if item == "bread" else 25.0, new_modifier)) # условная базовая цена
-                
-            conn.commit()
-            conn.close()
-            logger.info("Глобальные котировки рынка успешно обновлены.")
-        except Exception as e:
-            logger.error(f"Ошибка в market_ticker: {e}")
-            await asyncio.sleep(5)
-
-async def buyer_simulation_ticker(bot: Bot) -> None:
-    """
-    Служба розничных покупателей. 
-    Каждые 30 секунд проверяет активных игроков и симулирует приход клиентов.
-    """
-    while True:
-        try:
-            await asyncio.sleep(30)
-            conn = get_db_connection()
-            cursor = conn.cursor()
-            
-            # Извлекаем данные всех незабаненных игроков, у которых есть хоть какой-то товар
-            cursor.execute("""
-                SELECT u.tg_id, u.username, u.reputation, u.money,
-                       i.ad_level, i.showcase_level,
-                       w.bread, w.milk, w.meat, w.clothes, w.phones
-                FROM users u
-                JOIN inventory i ON u.tg_id = i.tg_id
-                JOIN warehouse_stock w ON u.tg_id = w.tg_id
-                WHERE u.is_ban = 0;
-            """)
-            players = cursor.fetchall()
-            
-            for player in players:
-                tg_id = player["tg_id"]
-                
-                # Расчет индивидуального интервала прихода клиента
-                interval = calculate_client_interval(player["reputation"], player["ad_level"])
-                
-                # Вероятность того, что клиент совершит покупку именно в этот 30-секундный тик
-                if random.randint(1, 100) > (30 / interval * 100):
-                    continue
-                
-                # Собираем список доступных легальных товаров на складе игрока
-                stock = {
-                    "bread": player["bread"], "milk": player["milk"],
-                    "meat": player["meat"], "clothes": player["clothes"], "phones": player["phones"]
-                }
-                available_items = [item for item, count in stock.items() if count > 0]
-                
-                if not available_items:
-                    # Склад пуст. Если запущена реклама (ad_level > 1), игрок теряет репутацию
-                    if player["ad_level"] > 1:
-                        cursor.execute("UPDATE users SET reputation = max(0, reputation - 1) WHERE tg_id = ?;", (tg_id,))
-                        try:
-                            await bot.send_message(
-                                tg_id, 
-                                "📉 Клиент ушел ни с чем. Вы теряете репутацию из-за пустого склада!"
-                            )
-                        except Exception:
-                            pass
-                    continue
-                
-                # Выбираем случайный товар из тех, что есть в наличии
-                chosen_item = random.choice(available_items)
-                
-                # Получаем рыночные параметры товара
-                cursor.execute("SELECT base_price, demand_modifier FROM system_market WHERE item_id = ?;", (chosen_item,))
-                market_row = cursor.fetchone()
-                base_price = market_row["base_price"] if market_row else 20.0
-                demand_mod = market_row["demand_modifier"] if market_row else 1.0
-                
-                # Получаем кастомную цену игрока
-                cursor.execute("SELECT custom_price, is_auto FROM user_prices WHERE tg_id = ? AND item_id = ?;", (tg_id, chosen_item))
-                price_row = cursor.fetchone()
-                
-                is_auto = price_row["is_auto"] if price_row else 1
-                custom_price = price_row["custom_price"] if price_row else None
-                
-                # Вычисляем финальную стоимость продажи
-                final_price = get_final_price(is_auto, custom_price, base_price, player["showcase_level"], demand_mod)
-                
-                # Проверка жестких экономических ограничений из ТЗ
-                purchase_allowed = True
-                if is_auto == 0 and custom_price:
-                    # Если цена завышена более чем на 50%, шанс покупки падает до 5%
-                    if custom_price > (base_price * 1.5) and random.randint(1, 100) > 5:
-                        purchase_allowed = False
-                    # Если превышает рынок на 20% — штраф к репутации за каждую продажу
-                    elif custom_price > (base_price * 1.2):
-                        cursor.execute("UPDATE users SET reputation = max(0, reputation - 2) WHERE tg_id = ?;", (tg_id,))
-                
-                if not purchase_allowed:
-                    continue
-                
-                # Проводим транзакцию продажи 1 единицы товара
-                cursor.execute(f"UPDATE warehouse_stock SET {chosen_item} = {chosen_item} - 1 WHERE tg_id = ?;", (tg_id,))
-                cursor.execute("UPDATE users SET money = money + ? WHERE tg_id = ?;", (final_price, tg_id))
-                
-                item_names_ru = {"bread": "Хлеб", "milk": "Молоко", "meat": "Мясо", "clothes": "Одежду", "phones": "Смартфоны"}
-                
-                try:
-                    await bot.send_message(
-                        tg_id,
-                        f"🛒 Покупатель приобрел {item_names_ru[chosen_item]} за {final_price} 💵!\n"
-                        f"Твоя чистая прибыль: +{final_price} 💵"
-                    )
-                except Exception:
-                    pass
-                    
-            conn.commit()
-            conn.close()
-        except Exception as e:
-            logger.error(f"Ошибка в buyer_simulation_ticker: {e}")
-            await asyncio.sleep(5)
+ITEM_NAMES_RU = {
+    "bread": "Хлеб 🍞",
+    "milk": "Молоко 🥛",
+    "phones": "Смартфоны 📱"
+}
 
 async def energy_regen_ticker() -> None:
     """
-    Фоновый цикл регенерации энергии.
-    Каждые 15 минут восстанавливает 2 единицы AP всем игрокам, 
-    у которых текущая энергия меньше максимальной.
+    Движок регенерации энергии (AP).
+    Каждые 5 минут начисляет игрокам по +1 AP, не превышая их max_energy.
     """
     while True:
+        await asyncio.sleep(300) # 5 минут
+        conn = get_db_connection()
+        cursor = conn.cursor()
         try:
-            await asyncio.sleep(900)  # 15 минут (900 секунд)
-            conn = get_db_connection()
-            cursor = conn.cursor()
-            
-            # Атомарный апдейт энергии в пределах лимита max_energy
             cursor.execute("""
                 UPDATE users 
-                SET energy = MIN(max_energy, energy + 2),
-                    last_energy_regen = CURRENT_TIMESTAMP
-                WHERE energy < max_energy AND is_ban = 0;
+                SET energy = MIN(max_energy, energy + 1)
+                WHERE energy < max_energy;
             """)
-            
             conn.commit()
+            logger.debug("Фоновая регенерация энергии успешно выполнена.")
+        except sqlite3.Error as e:
+            logger.error(f"Ошибка при регенерации энергии: {e}")
+        finally:
             conn.close()
-            logger.info("Регенерация энергии для активных магнатов успешно выполнена.")
-        except Exception as e:
-            logger.error(f"Ошибка в energy_regen_ticker: {e}")
-            await asyncio.sleep(5)
+
+async def market_ticker() -> None:
+    """
+    Авто-Тик глобального рынка.
+    Каждые 30 минут случайным образом меняет коэффициенты спроса (demand_modifier) в диапазоне [0.6, 1.6].
+    """
+    while True:
+        await asyncio.sleep(1800) # 30 минут
+        conn = get_db_connection()
+        cursor = conn.cursor()
+        try:
+            cursor.execute("SELECT item_id FROM system_market;")
+            items = cursor.fetchall()
+            
+            cursor.execute("BEGIN TRANSACTION;")
+            for item in items:
+                # Генерируем новый случайный коэффициент спроса
+                new_mod = round(random.uniform(0.6, 1.6), 2)
+                cursor.execute(
+                    "UPDATE system_market SET demand_modifier = ? WHERE item_id = ?;",
+                    (new_mod, item["item_id"])
+                )
+            conn.commit()
+            logger.info("Глобальные котировки рынка успешно обновились.")
+        except sqlite3.Error as e:
+            conn.rollback()
+            logger.error(f"Ошибка при обновлении котировок рынка: {e}")
+        finally:
+            conn.close()
+
+async def buyer_simulation_ticker(bot: Bot) -> None:
+    """
+    Движок симуляции покупателей (Продажи).
+    Каждую минуту проверяет всех игроков. Если у игрока подошел таймер прихода клиента,
+    происходит попытка покупки случайного товара с его склада.
+    """
+    while True:
+        await asyncio.sleep(60) # Проверка раз в минуту
+        conn = get_db_connection()
+        # Переводим в режим словарей для удобства работы с полями
+        conn.row_factory = sqlite3.Row
+        cursor = conn.cursor()
+        
+        try:
+            # Получаем всех пользователей и их параметры
+            cursor.execute("""
+                SELECT u.*, ws.bread, ws.milk, ws.phones, ws.contraband 
+                FROM users u
+                JOIN warehouse_stock ws ON u.tg_id = ws.tg_id;
+            """)
+            users = cursor.fetchall()
+            
+            now_ts = int(datetime.now().timestamp())
+            
+            for user in users:
+                tg_id = user["tg_id"]
+                
+                # Считаем персональный интервал прихода клиента (в сек) на основе репутации и рекламы
+                interval = calculate_client_interval(user["reputation"], user["ad_level"])
+                
+                # Если с момента последнего визита прошло меньше времени, чем положено — пропускаем
+                if now_ts - user["last_client_time"] < interval:
+                    continue
+                    
+                # Ищем, какие товары вообще есть на складе у игрока (кроме контрабанды)
+                available_items = []
+                if user["bread"] > 0: available_items.append("bread")
+                if user["milk"] > 0: available_items.append("milk")
+                if user["phones"] > 0: available_items.append("phones")
+                
+                # Если склад пуст, покупатель уходит ни с чем, обновляем таймер ожидания
+                if not available_items:
+                    cursor.execute("UPDATE users SET last_client_time = ? WHERE tg_id = ?;", (now_ts, tg_id))
+                    continue
+                    
+                # Выбираем случайный товар для покупки
+                chosen_item = random.choice(available_items)
+                
+                # Получаем текущий модификатор рынка для этого товара
+                cursor.execute("SELECT demand_modifier FROM system_market WHERE item_id = ?;", (chosen_item,))
+                market_row = cursor.fetchone()
+                demand_mod = market_row["demand_modifier"] if market_row else 1.0
+                
+                # Получаем кастомную цену игрока
+                cursor.execute("SELECT custom_price FROM user_prices WHERE tg_id = ? AND item_id = ?;", (tg_id, chosen_item))
+                price_row = cursor.fetchone()
+                
+                base_price = BASE_PRICES.get(chosen_item, 10.0)
+                # Если цена не выставлена или авто-режим, рассчитываем честную рыночную цену со вкусом витрины
+                if not price_row or price_row["custom_price"] is None:
+                    showcase_boost = 1.0 + (user["showcase_level"] - 1) * 0.05
+                    final_price = round(base_price * demand_mod * showcase_boost, 2)
+                    is_overpriced = False
+                else:
+                    final_price = price_row["custom_price"]
+                    # Проверяем на оверпрайс через наше экономическое ядро (+20% лимит)
+                    check = check_price_overhead(final_price, base_price, demand_mod)
+                    is_overpriced = check["is_overpriced"]
+
+                # --- ПРОВЕДЕНИЕ ТРАНЗАКЦИИ ПРОДАЖИ ---
+                cursor.execute("BEGIN TRANSACTION;")
+                
+                if is_overpriced:
+                    # Покупатель развернулся и ушел, репутация падает за жадность
+                    cursor.execute("""
+                        UPDATE users 
+                        SET reputation = MAX(0, reputation - 2), last_client_time = ? 
+                        WHERE tg_id = ?;
+                    """, (now_ts, tg_id))
+                    conn.commit()
+                    
+                    try:
+                        await bot.send_message(
+                            tg_id,
+                            f"🚷 <b>Покупатель ушел без покупки!</b>\n\n"
+                            f"Его возмутила цена на {ITEM_NAMES_RU[chosen_item]} (<b>{final_price:.2f} 💵</b>).\n"
+                            f"Вы получили <b>-2 очка авторитета</b> за попытку спекуляции сверх лимита."
+                        )
+                    except Exception:
+                        pass # Юзер мог заблокировать бота, игнорируем ошибку отправки
+                else:
+                    # Успешная продажа: списываем 1 ед. товара, начисляем деньги и +10 опыта
+                    cursor.execute(
+                        f"UPDATE warehouse_stock SET {chosen_item} = {chosen_item} - 1 WHERE tg_id = ?;",
+                        (tg_id,)
+                    )
+                    cursor.execute("""
+                        UPDATE users 
+                        SET money = money + ?, exp = exp + 10, last_client_time = ? 
+                        WHERE tg_id = ?;
+                    """, (final_price, now_ts, tg_id))
+                    conn.commit()
+                    
+                    try:
+                        await bot.send_message(
+                            tg_id,
+                            f"💰 <b>Успешная продажа!</b>\n\n"
+                            f"Клиент приобрел {ITEM_NAMES_RU[chosen_item]} за <b>{final_price:.2f} 💵</b>.\n"
+                            f"Получено: <b>+10 EXP</b> 📈"
+                        )
+                    except Exception:
+                        pass
+
+        except sqlite3.Error as e:
+            if conn.in_transaction:
+                conn.rollback()
+            logger.error(f"Критическая ошибка в симуляторе продаж: {e}")
+        finally:
+            conn.close()
