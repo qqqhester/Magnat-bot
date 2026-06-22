@@ -11,36 +11,17 @@ def get_profile_inline() -> InlineKeyboardMarkup:
     )
     return builder.as_markup()
 
-def get_b2b_shop_main() -> InlineKeyboardMarkup:
-    """Главный экран управления торговой точкой."""
-    builder = InlineKeyboardBuilder()
-    builder.row(InlineKeyboardButton(text="📦 Закупить Товары", callback_data="shop_buy_goods"))
-    builder.row(InlineKeyboardButton(text="🔧 Прокачка Склада", callback_data="shop_upgrade_warehouse"))
-    builder.row(InlineKeyboardButton(text="👨‍💼 Наем Персонала", callback_data="shop_hire_staff"))
-    return builder.as_markup()
-
-def get_buy_volume_keyboard(item_id: str) -> InlineKeyboardMarkup:
-    """Инлайн-калькулятор закупки конкретной партии товара."""
-    builder = InlineKeyboardBuilder()
-    builder.row(
-        InlineKeyboardButton(text="+1", callback_data=f"buy_vol:{item_id}:1"),
-        InlineKeyboardButton(text="+10", callback_data=f"buy_vol:{item_id}:10"),
-        InlineKeyboardButton(text="МАКС", callback_data=f"buy_vol:{item_id}:max")
-    )
-    builder.row(InlineKeyboardButton(text="✅ Подтвердить Сделку", callback_data=f"buy_confirm:{item_id}"))
-    builder.row(InlineKeyboardButton(text="⚙️ Настроить Свою Цену", callback_data=f"price_config:{item_id}"))
-    return builder.as_markup()
-
 def get_market_inline() -> InlineKeyboardMarkup:
-    """Клавиатура аналитического среза рынка."""
+    """Клавиатура аналитического среза рынка с кнопкой ручного обновления."""
     builder = InlineKeyboardBuilder()
-    builder.row(InlineKeyboardButton(text="💡 Платный Совет Аналитика (Цена: 5 AP)", callback_data="market_analyst_tip"))
+    builder.row(InlineKeyboardButton(text="💡 Совет Аналитика (5 AP)", callback_data="market_analyst_tip"))
+    builder.row(InlineKeyboardButton(text="🔄 Обновить котировки", callback_data="market_refresh"))
     return builder.as_markup()
 
 def get_rivals_inline() -> InlineKeyboardMarkup:
     """Клавиатура теневого сектора конкурентов."""
     builder = InlineKeyboardBuilder()
-    builder.row(InlineKeyboardButton(text="⚔️ Демпинг рынка (Цена: 10 AP + 200💵)", callback_data="rivals_dumping"))
+    builder.row(InlineKeyboardButton(text="⚔️ Демпинг рынка (10 AP + 200💵)", callback_data="rivals_dumping"))
     builder.row(InlineKeyboardButton(text="☣️ Рискнуть и взять Контрабанду", callback_data="rivals_contraband"))
     return builder.as_markup()
 
@@ -56,28 +37,5 @@ def get_activation_inline(bonus_locked: bool, time_left_str: str = "") -> Inline
         bonus_callback = "bonus_claim"
         
     builder.row(InlineKeyboardButton(text=bonus_text, callback_data=bonus_callback))
-    builder.row(InlineKeyboardButton(text="🎟️ Ввести Наградной Промокод", callback_data="promo_activate"))
-    return builder.as_markup()
-
-# --- НОВЫЙ БЛОК: КЛАВИАТУРЫ АДМИН-ПАНЕЛИ ---
-
-def get_admin_main() -> InlineKeyboardMarkup:
-    """Главный пульт управления гейм-мастера."""
-    builder = InlineKeyboardBuilder()
-    builder.row(InlineKeyboardButton(text="💰 Изменить кэш игроку", callback_data="admin_give_money"))
-    builder.row(InlineKeyboardButton(text="🔄 Ротация рынка (Тик)", callback_data="admin_market_tick"))
-    builder.row(InlineKeyboardButton(text="📊 Серверная статистика", callback_data="admin_server_stats"))
-    builder.row(InlineKeyboardButton(text="❌ Закрыть пульт", callback_data="admin_close"))
-    return builder.as_markup()
-
-def get_admin_back() -> InlineKeyboardMarkup:
-    """Универсальная кнопка возврата в корень админки."""
-    builder = InlineKeyboardBuilder()
-    builder.row(InlineKeyboardButton(text="⬅️ Назад в админку", callback_data="admin_main_menu"))
-    return builder.as_markup()
-
-def get_admin_cancel() -> InlineKeyboardMarkup:
-    """Кнопка сброса FSM состояний ввода."""
-    builder = InlineKeyboardBuilder()
-    builder.row(InlineKeyboardButton(text="❌ Отменить операцию", callback_data="admin_main_menu"))
+    builder.row(InlineKeyboardButton(text="🎟️ Активировать промокод", callback_data="promo_activate"))
     return builder.as_markup()
