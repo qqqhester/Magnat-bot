@@ -9,6 +9,7 @@ from database.queries import register_user_if_not_exists, get_full_profile, upda
 from utils.economy import get_exp_next, get_warehouse_capacity
 from keyboards.reply import get_main_menu_keyboard
 from keyboards.inline import get_profile_inline
+from utils.ui_manager import register_active_profile # Импортируем трекер
 
 router = Router()
 
@@ -19,19 +20,18 @@ async def render_profile_screen(tg_id: int, message: Message, edit: bool = False
     """Универсальная функция сборки и отрисовки профиля (без спама)."""
     profile = get_full_profile(tg_id)
     if not profile:
-        await message.answer("❌ Профиль не найден. Напишите /start для инициализации.")
+        if not edit:
+            await message.answer("❌ Профиль не найден. Напишите /start для инициализации.")
         return
         
     exp_next = get_exp_next(profile["level"])
     
-    # Считаем текущую общую загрузку склада
     total_stock = (
         profile["bread"] + profile["milk"] + profile["meat"] + 
         profile["clothes"] + profile["phones"] + profile["contraband"]
     )
     capacity = get_warehouse_capacity(profile["warehouse_level"])
     
-    # Визуальный индикатор прогресс-бара опыта (10 делений)
     progress_segments = int((profile["exp"] / exp_next) * 10) if exp_next > 0 else 0
     progress_bar = "▓" * progress_segments + "░" * (10 - progress_segments)
     
@@ -50,9 +50,12 @@ async def render_profile_screen(tg_id: int, message: Message, edit: bool = False
     )
     
     if edit:
-        await message.edit_text(profile_text, reply_markup=get_profile_inline())
+        sent_msg = await message.edit_text(profile_text, reply_markup=get_profile_inline())
     else:
-        await message.answer(profile_text, reply_markup=get_profile_inline())
+        sent_msg = await message.answer(profile_text, reply_markup=get_profile_inline())
+        
+    # Регистрируем ID сообщения в Live UI менеджере
+    register_active_profile(tg_id, sent_msg.message_id)
 
 @router.message(CommandStart())
 @router.message(F.text.lower().in_(["старт", "начать", "привет"]))
@@ -91,17 +94,21 @@ async def profile_back_callback(callback: CallbackQuery) -> None:
 async def start_rename_shop(callback: CallbackQuery, state: FSMContext) -> None:
     """Перевод пользователя в состояние FSM ожидания нового имени."""
     await callback.answer()
-    await callback.message.edit_text(
+    sent_msg = await callback.message.edit_text(
         "✏️ <b>Режим переименования фирмы</b>\n\n"
         "Введите новое название для вашей торговой марки прямо в чат (до 20 символов):",
         reply_markup=None
     )
+    # Сохраняем ID сообщения, чтобы потом почистить его или обновить
+    await state.update_data(edit_msg_id=sent_msg.message_id)
     await state.set_state(ProfileStates.input_shop_name)
 
 @router.message(ProfileStates.input_shop_name)
 async def process_shop_rename(message: Message, state: FSMContext) -> None:
     """Валидация и применение нового имени торговой точки."""
     new_name = message.text.strip()
+    state_data = await state.get_data()
+    edit_msg_id = state_data.get("edit_msg_id")
     
     if len(new_name) > 20:
         await message.answer("❌ Название слишком длинное! Максимум 20 символов. Попробуйте еще раз:")
@@ -109,6 +116,19 @@ async def process_shop_rename(message: Message, state: FSMContext) -> None:
         
     update_shop_name(message.from_user.id, new_name)
     await state.clear()
+    
+    # Стираем инструкцию ввода, превращая её обратно в обновленный профиль
+    if edit_msg_id:
+        try:
+            from aiogram.types import Chat
+            dummy_message = Message(message_id=edit_msg_id, date=None, chat=Chat(id=message.from_user.id, type="private"))
+            await render_profile_screen(message.from_user.id, dummy_message, edit=True)
+            await message.answer(f"✅ Название фирмы успешно изменено на: <b>\"{new_name}\"</b>")
+            return
+        except Exception:
+            pass
+
+    # Паллбэк, если сообщение инструкции было удалено
     await message.answer(f"✅ Название фирмы успешно изменено на: <b>\"{new_name}\"</b>")
     await render_profile_screen(message.from_user.id, message, edit=False)
 
@@ -131,7 +151,7 @@ async def show_profile_property(callback: CallbackQuery) -> None:
 
 @router.callback_query(F.data == "profile_achievements")
 async def show_profile_achievements(callback: CallbackQuery) -> None:
-    """Экран достижений магната (Бесшовный)."""
+    """Экран достижения магната (Бесшовный)."""
     await callback.answer()
     back_kb = InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text="🔙 Назад в профиль", callback_data="profile_back")]
@@ -142,6 +162,6 @@ async def show_profile_achievements(callback: CallbackQuery) -> None:
         "🥈 <code>Первый рубль</code> — Заработать 100 баксов (🔒 Блокировано)\n"
         "🥇 <code>Контрабандист</code> — Успешно завезти нелегал 5 раз (🔒 Блокировано)\n"
         "💀 <code>Гроза силовиков</code> — Откупиться или пережить облаву (🔒 Блокировано)\n\n"
-        "<i>Каждое достижение будет приносить ценные 💎 кристаллы!</i>"
+        "<i>Каждое achievement будет приносить ценные 💎 кристаллы!</i>"
     )
     await callback.message.edit_text(text, reply_markup=back_kb)
