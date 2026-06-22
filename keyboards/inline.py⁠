@@ -1,0 +1,61 @@
+from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
+from aiogram.utils.keyboard import InlineKeyboardBuilder
+
+def get_profile_inline() -> InlineKeyboardMarkup:
+    """Инлайн-кнопки под главным экраном профиля империи."""
+    builder = InlineKeyboardBuilder()
+    builder.row(InlineKeyboardButton(text="✏️ Изменить Название Фирмы", callback_data="profile_rename"))
+    builder.row(
+        InlineKeyboardButton(text="🏠 Имущество", callback_data="profile_property"),
+        InlineKeyboardButton(text="🏆 Достижения", callback_data="profile_achievements")
+    )
+    return builder.as_markup()
+
+def get_b2b_shop_main() -> InlineKeyboardMarkup:
+    """Главный экран управления торговой точкой."""
+    builder = InlineKeyboardBuilder()
+    builder.row(InlineKeyboardButton(text="📦 Закупить Товары", callback_data="shop_buy_goods"))
+    builder.row(InlineKeyboardButton(text="🔧 Прокачка Склада", callback_data="shop_upgrade_warehouse"))
+    builder.row(InlineKeyboardButton(text="👨‍💼 Наем Персонала", callback_data="shop_hire_staff"))
+    return builder.as_markup()
+
+def get_buy_volume_keyboard(item_id: str) -> InlineKeyboardMarkup:
+    """Инлайн-калькулятор закупки конкретной партии товара."""
+    builder = InlineKeyboardBuilder()
+    # Передаем тип операции, идентификатор товара и объем в callback_data
+    builder.row(
+        InlineKeyboardButton(text="+1", callback_data=f"buy_vol:{item_id}:1"),
+        InlineKeyboardButton(text="+10", callback_data=f"buy_vol:{item_id}:10"),
+        InlineKeyboardButton(text="МАКС", callback_data=f"buy_vol:{item_id}:max")
+    )
+    builder.row(InlineKeyboardButton(text="✅ Подтвердить Сделку", callback_data=f"buy_confirm:{item_id}"))
+    builder.row(InlineKeyboardButton(text="⚙️ Настроить Свою Цену", callback_data=f"price_config:{item_id}"))
+    return builder.as_markup()
+
+def get_market_inline() -> InlineKeyboardMarkup:
+    """Клавиатура аналитического среза рынка."""
+    builder = InlineKeyboardBuilder()
+    builder.row(InlineKeyboardButton(text="💡 Платный Совет Аналитика (Цена: 5 AP)", callback_data="market_analyst_tip"))
+    return builder.as_markup()
+
+def get_rivals_inline() -> InlineKeyboardMarkup:
+    """Клавиатура теневого сектора конкурентов."""
+    builder = InlineKeyboardBuilder()
+    builder.row(InlineKeyboardButton(text="⚔️ Демпинг рынка (Цена: 10 AP + 200💵)", callback_data="rivals_dumping"))
+    builder.row(InlineKeyboardButton(text="☣️ Рискнуть и взять Контрабанду", callback_data="rivals_contraband"))
+    return builder.as_markup()
+
+def get_activation_inline(bonus_locked: bool, time_left_str: str = "") -> InlineKeyboardMarkup:
+    """Динамическая клавиатура распределительного центра бонусов."""
+    builder = InlineKeyboardBuilder()
+    
+    if bonus_locked:
+        bonus_text = f"⏳ Доля будет через: {time_left_str}"
+        bonus_callback = "bonus_locked"
+    else:
+        bonus_text = "💰 Забрать Суточный Бонус"
+        bonus_callback = "bonus_claim"
+        
+    builder.row(InlineKeyboardButton(text=bonus_text, callback_data=bonus_callback))
+    builder.row(InlineKeyboardButton(text="🎟️ Ввести Наградной Промокод", callback_data="promo_activate"))
+    return builder.as_markup()
