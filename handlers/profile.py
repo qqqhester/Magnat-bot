@@ -3,6 +3,7 @@ from aiogram.filters import CommandStart, Command
 from aiogram.types import Message, CallbackQuery
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import StatesGroup, State
+from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
 
 from database.queries import register_user_if_not_exists, get_full_profile, update_shop_name
 from utils.economy import get_exp_next, get_warehouse_capacity
@@ -34,7 +35,7 @@ async def render_profile_screen(tg_id: int, message: Message, edit: bool = False
     progress_segments = int((profile["exp"] / exp_next) * 10) if exp_next > 0 else 0
     progress_bar = "▓" * progress_segments + "░" * (10 - progress_segments)
     
-    top_rank = 12  # Эмуляция ТОПа
+    top_rank = 12 
     
     profile_text = (
         f"🏪 Империя: <b>\"{profile['shop_name']}\"</b>\n"
@@ -74,9 +75,10 @@ async def start_cmd(message: Message, state: FSMContext) -> None:
         
     await message.answer(welcome_text, reply_markup=get_main_menu_keyboard())
 
-@router.message(F.text.lower().in_(["👤 моя империя", "проф", "стата", "/profile"]))
-async def show_profile_msg(message: Message) -> None:
-    """Отрисовка профиля через текстовую команду."""
+@router.message(Command("profile"))
+@router.message(F.text.lower().in_(["👤 моя империя", "проф", "стата"]))
+async def show_profile(message: Message) -> None:
+    """Сборка и вывод полных данных профиля игрока через текстовую команду."""
     await render_profile_screen(message.from_user.id, message, edit=False)
 
 @router.callback_query(F.data == "profile_back")
@@ -89,11 +91,10 @@ async def profile_back_callback(callback: CallbackQuery) -> None:
 async def start_rename_shop(callback: CallbackQuery, state: FSMContext) -> None:
     """Перевод пользователя в состояние FSM ожидания нового имени."""
     await callback.answer()
-    # Информируем пользователя без отправки нового сообщения
     await callback.message.edit_text(
         "✏️ <b>Режим переименования фирмы</b>\n\n"
         "Введите новое название для вашей торговой марки прямо в чат (до 20 символов):",
-        reply_markup=None # Убираем кнопки на время ввода
+        reply_markup=None
     )
     await state.set_state(ProfileStates.input_shop_name)
 
@@ -108,7 +109,39 @@ async def process_shop_rename(message: Message, state: FSMContext) -> None:
         
     update_shop_name(message.from_user.id, new_name)
     await state.clear()
-    
-    # Отправляем подтверждение и сразу под ним свежий профиль
     await message.answer(f"✅ Название фирмы успешно изменено на: <b>\"{new_name}\"</b>")
     await render_profile_screen(message.from_user.id, message, edit=False)
+
+@router.callback_query(F.data == "profile_property")
+async def show_profile_property(callback: CallbackQuery) -> None:
+    """Экран недвижимости и автопарка магната (Бесшовный)."""
+    await callback.answer()
+    back_kb = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="🔙 Назад в профиль", callback_data="profile_back")]
+    ])
+    text = (
+        "🏠 <b>НЕДВИЖИМОСТЬ И ЛИЧНЫЙ АВТОПАРК</b>\n\n"
+        "Здесь будет отображаться твое элитное имущество, прикрывающее теневые доходы.\n\n"
+        "🚗 <b>Автопарк:</b> ВАЗ-2112 (Тюнинг: Сток)\n"
+        "🏢 <b>Офисы:</b> Съемная точка на рынке (Ур. 1)\n"
+        "🏭 <b>Предприятия:</b> Отсутствуют\n\n"
+        "<i>⚙️ Раздел кастомизации и покупки авто/офисов находится в разработке.</i>"
+    )
+    await callback.message.edit_text(text, reply_markup=back_kb)
+
+@router.callback_query(F.data == "profile_achievements")
+async def show_profile_achievements(callback: CallbackQuery) -> None:
+    """Экран достижений магната (Бесшовный)."""
+    await callback.answer()
+    back_kb = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="🔙 Назад в профиль", callback_data="profile_back")]
+    ])
+    text = (
+        "🏆 <b>ДОСТИЖЕНИЯ И ЗАЛ СЛАВЫ</b>\n\n"
+        "Твои знаковые вехи в построении монополии:\n\n"
+        "🥈 <code>Первый рубль</code> — Заработать 100 баксов (🔒 Блокировано)\n"
+        "🥇 <code>Контрабандист</code> — Успешно завезти нелегал 5 раз (🔒 Блокировано)\n"
+        "💀 <code>Гроза силовиков</code> — Откупиться или пережить облаву (🔒 Блокировано)\n\n"
+        "<i>Каждое достижение будет приносить ценные 💎 кристаллы!</i>"
+    )
+    await callback.message.edit_text(text, reply_markup=back_kb)
