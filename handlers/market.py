@@ -8,28 +8,22 @@ from keyboards.inline import get_market_inline
 
 router = Router()
 
-# Справочник названий для красивого вывода
 ITEM_NAMES = {
     "bread": "Хлеб 🍞",
     "milk": "Молоко 🥛",
     "phones": "Смартфоны 📱"
 }
 
-@router.message(F.text.lower().in_(["📊 спрос", "ценны", "рынок", "котировки"]))
-async def show_demand(message: Message) -> None:
-    """Вывод актуальных коэффициентов спроса из таблицы system_market."""
+async def render_market_screen(message: Message, edit: bool = False) -> None:
+    """Рендеринг аналитического среза рынка."""
     conn = get_db_connection()
     cursor = conn.cursor()
-    
-    # Извлекаем текущее состояние глобального рынка
     cursor.execute("SELECT item_id, demand_modifier FROM system_market;")
     rows = cursor.fetchall()
     conn.close()
 
-    # Мапим индексы в читаемый вид
     market_data = {row["item_id"]: row["demand_modifier"] for row in rows}
     
-    # Если в базе еще нет записей (до первого тика), ставим дефолт 1.0
     demand_bread = market_data.get("bread", 1.0)
     demand_milk = market_data.get("milk", 1.0)
     demand_phones = market_data.get("phones", 1.0)
@@ -48,11 +42,24 @@ async def show_demand(message: Message) -> None:
         f"• Смартфоны: Коэф. <b>{demand_phones:.2f}</b> {get_status_emoji(demand_phones)}\n"
     )
 
-    await message.answer(text, reply_markup=get_market_inline())
+    if edit:
+        await message.edit_text(text, reply_markup=get_market_inline())
+    else:
+        await message.answer(text, reply_markup=get_market_inline())
+
+@router.message(F.text.lower().in_(["📊 спрос", "ценны", "рынок", "котировки"]))
+async def show_demand(message: Message) -> None:
+    await render_market_screen(message, edit=False)
+
+@router.callback_query(F.data == "market_refresh")
+async def refresh_market_callback(callback: CallbackQuery) -> None:
+    """Обновление котировок по кнопке."""
+    await callback.answer("🔄 Данные рынка обновлены!")
+    await render_market_screen(callback.message, edit=True)
 
 @router.callback_query(F.data == "market_analyst_tip")
 async def process_analyst_tip(callback: CallbackQuery) -> None:
-    """Платный совет: списывает 5 AP, находит лучший товар на складе для продажи."""
+    """Платный совет аналитика."""
     tg_id = callback.from_user.id
     profile = get_full_profile(tg_id)
     
@@ -60,43 +67,37 @@ async def process_analyst_tip(callback: CallbackQuery) -> None:
         await callback.answer("Профиль не найден.", show_alert=True)
         return
 
-    # Проверка лимита энергии
     if profile["energy"] < 5:
-        await callback.answer(
-            "娱乐 ⛔ Недостаточно энергии! Для совета аналитика требуется 5 AP.", 
-            show_alert=True
-        )
+        await callback.answer("⛔ Недостаточно энергии! Требуется 5 AP.", show_alert=True)
         return
 
     conn = get_db_connection()
     cursor = conn.cursor()
     
-    # Списываем 5 единиц энергии
+    # Тратим энергию
     cursor.execute("UPDATE users SET energy = energy - 5 WHERE tg_id = ?;", (tg_id,))
-    
-    # Берем котировки рынка
     cursor.execute("SELECT item_id, demand_modifier FROM system_market;")
     market_rows = cursor.fetchall()
-    conn.close()
     
     if not market_rows:
+        conn.close()
         await callback.answer("Рынок пуст, аналитики разводят руками.", show_alert=True)
         return
         
-    # Находим товар с максимальным коэффициентом спроса
     best_item = max(market_rows, key=lambda x: x["demand_modifier"])
     item_id = best_item["item_id"]
     modifier = best_item["demand_modifier"]
     
+    conn.commit()
+    conn.close()
+    
     item_name_ru = ITEM_NAMES.get(item_id, item_id)
     
-    conn.commit() # Фиксируем трату энергии
-    
-    # Выдаем результат в формате alert-поп-апа
     alert_text = (
         f"💡 ИНСАЙД АНАЛИТИКА:\n\n"
         f"Сливай {item_name_ru} прямо сейчас!\n"
         f"Его индекс спроса равен {modifier:.2f}. "
         f"Покупатели готовы переплачивать!"
     )
+    # Показываем инсайд алертом, сообщение рынка оставляем целым
     await callback.answer(text=alert_text, show_alert=True)
