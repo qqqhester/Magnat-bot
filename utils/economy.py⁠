@@ -1,0 +1,33 @@
+import random
+
+def get_exp_next(current_level: int) -> int:
+    """Расчет необходимого опыта для следующего уровня (Раздел 3.3 ТЗ)."""
+    return 100 * (current_level ** 2)
+
+def get_warehouse_capacity(warehouse_level: int) -> int:
+    """Емкость склада в зависимости от его прокачки (Раздел 3.4 ТЗ)."""
+    return 50 * warehouse_level
+
+def calculate_client_interval(reputation: int, ad_level: int) -> float:
+    """
+    Расчет интервала прихода покупателя в секундах.
+    Базовый — 300 сек. Реклама и авторитет ускоряют поток.
+    """
+    base_interval = 300.0
+    # Каждая единица репутации срезает 0.1 сек, каждый ур. рекламы дает буст 15%
+    interval = (base_interval - (reputation * 0.1)) * (1.0 - (ad_level - 1) * 0.15)
+    return max(15.0, interval)  # Клиент не может приходить чаще, чем раз в 15 секунд
+
+def get_final_price(is_auto: int, custom_price: float | None, base_price: float, showcase_level: int, demand_mod: float) -> float:
+    """Расчет финальной розничной цены продажи товара."""
+    if is_auto == 1 or custom_price is None:
+        # Авто-цена: Базовая * Модификатор рынка * Буст витрины (+5% за уровень)
+        showcase_boost = 1.0 + (showcase_level - 1) * 0.05
+        return round(base_price * demand_mod * showcase_boost, 2)
+    return round(custom_price, 2)
+
+def calculate_raid_chance(security_level: int) -> int:
+    """Шанс облавы при покупке контрабанды. Безопасность снижает риск."""
+    base_chance = 40  # Базовый риск 40%
+    reduced_chance = base_chance - (security_level - 1) * 7
+    return max(5, reduced_chance)  # Минимальный риск даже с охраной — 5%
